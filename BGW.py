@@ -2,23 +2,60 @@
 
 import random
 import math
+import statistics
+from scipy.special import binom
 from tkinter import *
 from itertools import accumulate
 
 def poisson_p(rate ,k):
     return (rate ** k) * math.exp(-rate)/math.factorial(k)
 
-def p(k):
-    if k==4:
-        return .5
-    if k==1:
-        return .1
-    if k==0:
-        return .4
-    return 0.
+def poisson_phi(rate, t):
+    return math.exp(rate * (t-1))
+
+def poisson_phi_inv(rate, x):
+    if x == 0:
+        return float("-inf")
+    return (rate + math.log(x))/rate
+
+def binomial_p(d, p, k):
+    return binom(d, k) * (p ** k) * ((1-p) ** (d-k))
+
+def binomial_phi(d, p, t):
+    return ((1-p)+p*t) ** d
+
+def binomial_phi_inv(d, p, x):
+    return (math.pow(x, 1/d) + p-1) / p
+
+def geometric_p(p, k):
+    return ((1-p) ** (k-1)) * p
+
+def geometric_phi(p, t):
+    return (1-p) / (1-p*s)
+
+def geometric_phi_inv(p, x):
+    return (x+p-1)/(p*x)
+
+def smallest_fixed_point(f, err):
+    x = 0.
+    while abs(f(x)-x) > err and x < 1:
+        x += err
+    return x
+
+def smallest_fixed_point2(phi_inv, err):
+    x = .99
+    while abs(phi_inv(x)-x) > err:
+        x = phi_inv(x)
+    return x
 
 def p(k):
-    return poisson_p(3,k)
+    return binomial_p(3,.9, k)
+
+def phi(t):
+    return binomial_phi(3,.9,t)
+
+def phi_inv(x):
+    return binomial_phi_inv(3,.9,x)
 
 class CDF:
     def __init__(self, p):
@@ -83,6 +120,11 @@ class BGWTree:
             self.generations.append(next_generation)
             generation_number += 1
 
+    def generation_size(self, n):
+        if 0 <= n and n < self.num_generations():
+            return len(self.generations[n])
+        return 0
+
     def num_generations(self):
         return len(self.generations)
 
@@ -106,7 +148,7 @@ class BGWTree:
         return False
 
 class BGWDemo(Frame):
-    def __init__(self, master=None, p=None, max_depth=7):
+    def __init__(self, master=None, p=None, phi=None, phi_inv=None, max_depth=7):
         Frame.__init__(self, master)
         self.p = p
         self.max_depth = max_depth
@@ -114,6 +156,15 @@ class BGWDemo(Frame):
         self.num_extinct = 0
         self.num_with_binary_subtree = 0
         self.generation_sizes = [[] for i in range(max_depth+1)]
+        self.generation_sizes_conditioned_extinct = [[] for i in range(max_depth+1)]
+        self.generation_sizes_conditioned_nonextinct = [[] for i in range(max_depth+1)]
+        if phi_inv:
+            self.extinct_p = round(smallest_fixed_point2(phi_inv,.0001), 3)
+        elif phi:
+            self.extinct_p = round(smallest_fixed_point(phi,.0001), 3)
+        else:
+            self.extinct_p = None
+
         self.canvas_frame = Frame(master)
         self.buttons_frame = Frame(master)
         self.canvas = Canvas(self.canvas_frame, highlightthickness=0)
@@ -126,6 +177,7 @@ class BGWDemo(Frame):
         self.percent_with_binary_subtree_label = Label(self.buttons_frame,
                 text="Percent with binary subtree:")
         self.extinct_percent_label = Label(self.buttons_frame, text="Percent extinct:")
+        self.extinct_theoretical_label = Label(self.buttons_frame, text="Theretical prob of extinction:")
         self.num_sampled_label = Label(self.buttons_frame, text="Sampled:")
         self.draw_ten_button = Button(self.buttons_frame, text="Draw 10",
                 command=self.sample(10))
@@ -133,19 +185,26 @@ class BGWDemo(Frame):
                 command=self.sample(100))
         self.draw_thousand_button = Button(self.buttons_frame, text="Draw 1000",
                 command=self.sample(1000))
+        self.draw_ten_thousand_button = Button(self.buttons_frame, text="Draw 10000",
+                command=self.sample(10000))
         self.generation_sizes_label = Label(self.buttons_frame, text="Avg generation sizes:") 
-
+        self.generation_sizes_nonextinct_label = Label(self.buttons_frame, text="Nonextinct avg generation sizes:") 
+        self.generation_sizes_extinct_label = Label(self.buttons_frame, text="Extinct avg generation sizes:") 
         
         self.num_sampled_label.pack(side=TOP)
         self.generation_sizes_label.pack(side=TOP)
-        self.extinct_percent_label.pack(side=TOP)
+        self.generation_sizes_extinct_label.pack(side=TOP)
+        self.generation_sizes_nonextinct_label.pack(side=TOP)
         self.extinct_label.pack(side=TOP)
+        self.extinct_percent_label.pack(side=TOP)
+        self.extinct_theoretical_label.pack(side=TOP)
         self.has_binary_subtree_label.pack(side=TOP)
         self.percent_with_binary_subtree_label.pack(side=TOP)
         self.new_tree_button.pack(side=LEFT)
         self.draw_ten_button.pack(side=LEFT)
         self.draw_hundred_button.pack(side=LEFT)
         self.draw_thousand_button.pack(side=LEFT)
+        self.draw_ten_thousand_button.pack(side=LEFT)
         self.quit_button.pack(side=LEFT)
         self.canvas.pack(expand=True, fill=BOTH)
         self.canvas_frame.pack(side=TOP, fill=BOTH, expand=True)
@@ -158,12 +217,16 @@ class BGWDemo(Frame):
     def new_tree(self):
         self.num_sampled += 1
         self.tree = BGWTree(p=self.p, max_depth=self.max_depth)
-        for i, g in enumerate(self.tree.generations):
-            self.generation_sizes[i].append(len(g))
         if self.tree.goes_extinct():
             self.num_extinct += 1
+            conditioned_sizes = self.generation_sizes_conditioned_extinct
+        else:
+            conditioned_sizes = self.generation_sizes_conditioned_nonextinct
         if self.tree.has_d_ary_subtree(2):
             self.num_with_binary_subtree += 1
+        for i in range(self.tree.max_depth+1):
+            self.generation_sizes[i].append(self.tree.generation_size(i))
+            conditioned_sizes[i].append(self.tree.generation_size(i))
 
     def new_tree_and_redraw(self):
         self.new_tree()
@@ -177,6 +240,8 @@ class BGWDemo(Frame):
         return f
 
     def draw_tree(self):
+        if not self.num_sampled:
+            return
         self.canvas.delete("all")
         tree = self.tree
         num_generations = tree.num_generations()
@@ -206,14 +271,22 @@ class BGWDemo(Frame):
                 tree.goes_extinct() else "Goes extinct: NO")
         self.extinct_percent_label.configure(text="Percent extinct: {}".format(
             self.num_extinct/self.num_sampled))
+        if self.extinct_p:
+            self.extinct_theoretical_label.configure(text="Theoretical prob of extinction: {}".format(self.extinct_p))
         self.percent_with_binary_subtree_label.configure(
             text="Percent with binary subtree: {}".format(
             self.num_with_binary_subtree/self.num_sampled))
         self.has_binary_subtree_label.configure(text="Has binary subtree: {}".format(
             "YES" if self.tree.has_d_ary_subtree(2) else "NO"))
-        #self.generation_sizes_label.configure(text="Avg generation sizes: {}".format(
+        self.generation_sizes_label.configure(text="Avg generation sizes: {}".format(
+            str([round(statistics.mean(x),2) for x in self.generation_sizes])))
+        self.generation_sizes_extinct_label.configure(text="Extinct avg generation sizes: {}".format(
+            str([round(statistics.mean(x),2) for x in self.generation_sizes_conditioned_extinct if x])))
+        self.generation_sizes_nonextinct_label.configure(text="Nonextinct avg generation sizes: {}".format(
+            str([round(statistics.mean(x),2) for x in self.generation_sizes_conditioned_nonextinct if x])))
+
 
 
 root = Tk()
-demo = BGWDemo(master=root, p=p, max_depth=9)
+demo = BGWDemo(master=root, p=p, phi=phi, max_depth=9)
 demo.mainloop()
