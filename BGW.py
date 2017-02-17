@@ -48,14 +48,17 @@ def smallest_fixed_point2(phi_inv, err):
         x = phi_inv(x)
     return x
 
+def estimate_mean(phi, dt):
+    return (phi(1)-phi(1-dt))/dt
+
 def p(k):
-    return binomial_p(3,.9, k)
+    return binomial_p(3,.5, k)
 
 def phi(t):
-    return binomial_phi(3,.9,t)
+    return binomial_phi(3,.5,t)
 
 def phi_inv(x):
-    return binomial_phi_inv(3,.9,x)
+    return binomial_phi_inv(3,.5,x)
 
 class CDF:
     def __init__(self, p):
@@ -157,13 +160,22 @@ class BGWDemo(Frame):
         self.num_with_binary_subtree = 0
         self.generation_sizes = [[] for i in range(max_depth+1)]
         self.generation_sizes_conditioned_extinct = [[] for i in range(max_depth+1)]
-        self.generation_sizes_conditioned_nonextinct = [[] for i in range(max_depth+1)]
+        self.extinct_phi = None
+        self.given_extinction_extinct_p = None
+        self.mean = -1
+        self.mean_given_extinction = -1
+        self.extinct_p = None
+        if phi:
+            self.extinct_p = round(smallest_fixed_point(phi,.0001), 3)
+            self.mean = estimate_mean(phi, .0001)
+            self.theoretical_generation_sizes = [self.mean ** i for i in range(max_depth+1)]
         if phi_inv:
             self.extinct_p = round(smallest_fixed_point2(phi_inv,.0001), 3)
-        elif phi:
-            self.extinct_p = round(smallest_fixed_point(phi,.0001), 3)
-        else:
-            self.extinct_p = None
+        if phi and self.extinct_p > 0:
+            self.extinct_phi = lambda x: phi(self.extinct_p * x)/ self.extinct_p
+            self.given_extinction_extinct_p = round(smallest_fixed_point(self.extinct_phi,.0001), 3)
+            self.mean_given_extinction = estimate_mean(self.extinct_phi, .0001)
+            self.theoretical_generation_sizes_conditioned_extinct = [self.mean_given_extinction ** i for i in range(max_depth+1)]
 
         self.canvas_frame = Frame(master)
         self.buttons_frame = Frame(master)
@@ -188,13 +200,19 @@ class BGWDemo(Frame):
         self.draw_ten_thousand_button = Button(self.buttons_frame, text="Draw 10000",
                 command=self.sample(10000))
         self.generation_sizes_label = Label(self.buttons_frame, text="Avg generation sizes:") 
-        self.generation_sizes_nonextinct_label = Label(self.buttons_frame, text="Nonextinct avg generation sizes:") 
         self.generation_sizes_extinct_label = Label(self.buttons_frame, text="Extinct avg generation sizes:") 
+        self.theoretical_generation_sizes_label = Label(self.buttons_frame, text="Theoretical generation size means:")
+        self.mean_label = Label(self.buttons_frame, text="Theoretical mean:")
+        self.mean_given_extinction_label = Label(self.buttons_frame, text="Theoretical mean given extinction:")
+        self.theoretical_generation_sizes_given_extinction_label = Label(self.buttons_frame, text="Theoretical generation sizes given extinction:")
         
         self.num_sampled_label.pack(side=TOP)
+        self.mean_label.pack(side=TOP)
+        self.mean_given_extinction_label.pack(side=TOP)
         self.generation_sizes_label.pack(side=TOP)
+        self.theoretical_generation_sizes_label.pack(side=TOP)
         self.generation_sizes_extinct_label.pack(side=TOP)
-        self.generation_sizes_nonextinct_label.pack(side=TOP)
+        self.theoretical_generation_sizes_given_extinction_label.pack(side=TOP)
         self.extinct_label.pack(side=TOP)
         self.extinct_percent_label.pack(side=TOP)
         self.extinct_theoretical_label.pack(side=TOP)
@@ -219,14 +237,12 @@ class BGWDemo(Frame):
         self.tree = BGWTree(p=self.p, max_depth=self.max_depth)
         if self.tree.goes_extinct():
             self.num_extinct += 1
-            conditioned_sizes = self.generation_sizes_conditioned_extinct
-        else:
-            conditioned_sizes = self.generation_sizes_conditioned_nonextinct
         if self.tree.has_d_ary_subtree(2):
             self.num_with_binary_subtree += 1
         for i in range(self.tree.max_depth+1):
             self.generation_sizes[i].append(self.tree.generation_size(i))
-            conditioned_sizes[i].append(self.tree.generation_size(i))
+            if self.tree.goes_extinct():
+                self.generation_sizes_conditioned_extinct[i].append(self.tree.generation_size(i))
 
     def new_tree_and_redraw(self):
         self.new_tree()
@@ -266,24 +282,31 @@ class BGWDemo(Frame):
                 if node.parent:
                     self.canvas.create_line(node.x, node.y, node.parent.x,
                             node.parent.y)
+        self.update_labels()
+
+    def update_labels(self):
+        tree = self.tree
         self.num_sampled_label.configure(text="Sampled: {}".format(self.num_sampled))
+        self.mean_label.configure(text="Theoretical mean: {}".format(round(self.mean,3)))
         self.extinct_label.configure(text="Goes extinct: YES" if
                 tree.goes_extinct() else "Goes extinct: NO")
         self.extinct_percent_label.configure(text="Percent extinct: {}".format(
-            self.num_extinct/self.num_sampled))
+            round(self.num_extinct/self.num_sampled,3)))
         if self.extinct_p:
-            self.extinct_theoretical_label.configure(text="Theoretical prob of extinction: {}".format(self.extinct_p))
+            self.extinct_theoretical_label.configure(text="Theoretical prob of extinction: {}".format(round(self.extinct_p,3)))
         self.percent_with_binary_subtree_label.configure(
             text="Percent with binary subtree: {}".format(
-            self.num_with_binary_subtree/self.num_sampled))
+            round(self.num_with_binary_subtree/self.num_sampled,3)))
         self.has_binary_subtree_label.configure(text="Has binary subtree: {}".format(
             "YES" if self.tree.has_d_ary_subtree(2) else "NO"))
         self.generation_sizes_label.configure(text="Avg generation sizes: {}".format(
-            str([round(statistics.mean(x),2) for x in self.generation_sizes])))
+            str([round(statistics.mean(x),3) for x in self.generation_sizes])))
+        self.theoretical_generation_sizes_label.configure(text="Theoretical avg generation sizes: {}".format(
+            str([round(x,3) for x in self.theoretical_generation_sizes])))
+        self.mean_given_extinction_label.configure(text="Theoretical mean given extinction: {}".format(round(self.mean_given_extinction,3)))
         self.generation_sizes_extinct_label.configure(text="Extinct avg generation sizes: {}".format(
-            str([round(statistics.mean(x),2) for x in self.generation_sizes_conditioned_extinct if x])))
-        self.generation_sizes_nonextinct_label.configure(text="Nonextinct avg generation sizes: {}".format(
-            str([round(statistics.mean(x),2) for x in self.generation_sizes_conditioned_nonextinct if x])))
+            str([round(statistics.mean(x),3) for x in self.generation_sizes_conditioned_extinct if x])))
+        self.theoretical_generation_sizes_given_extinction_label.configure(text="Theoretical exctinct avg generation sizes: {}".format(str([round(x,3) for x in self.theoretical_generation_sizes_conditioned_extinct])))
 
 
 
